@@ -1,0 +1,9 @@
+[package]
+name = "day6"
+version = "0.1.0"
+authors = ["Rachel K <raech.kanati@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+multimap = { version = "0.8", default-features = false, features = [] }
+
