@@ -1,8 +1,6 @@
 
 #![feature(bool_to_option)]
 
-use std::io::BufRead;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct P2 { x: i32, y: i32 }
 
@@ -101,11 +99,11 @@ mod intersections {
             }
             (Dx(wa), Dy(hb)) => {
                 impl_ortho(a.p.x, b.p.y, wa, hb, a.p.y, b.p.x)
-                    .then((P2::new(b.p.x, a.p.y), (b.p.x-a.p.x).abs(), (a.p.y-b.p.y).abs()))
+                    .then(|| (P2::new(b.p.x, a.p.y), (b.p.x-a.p.x).abs(), (a.p.y-b.p.y).abs()))
             }
             (Dy(ha), Dx(wb)) => {
                 impl_ortho(a.p.y, b.p.x, ha, wb, a.p.x, b.p.y)
-                    .then((P2::new(a.p.x, b.p.y), (b.p.x-a.p.x).abs(), (a.p.y-b.p.y).abs()))
+                    .then(|| (P2::new(a.p.x, b.p.y), (b.p.x-a.p.x).abs(), (a.p.y-b.p.y).abs()))
             }
         }
     }
@@ -142,12 +140,10 @@ mod tests {
 
 fn main() {
     let (wire_a, wire_b) = {
-        let file = std::fs::File::open("input").expect("opening input");
-        let input = std::io::BufReader::new(file);
+        let input = include_str!("../input");
         let mut wires = input
             .lines()
             .map(|line| {
-                let line = line.expect("reading line");
                 line.split(',')
                     .map(|seg| parse_path_segment(seg).expect("parsing path segment"))
                     .scan(
@@ -175,22 +171,18 @@ fn main() {
                         .map(move |(point, da, db)| {
                             let mn = point.manhattan_norm();
                             let loop_mn = *covered_a + *covered_b + da + db;
-                            (point.manhattan_norm(), loop_mn, point)
+                            (mn, loop_mn, point)
                         })
                 })
         })
         .collect();
 
-    println!("Intersections by Mh. norm from port");
     intersections.sort_by_key(|(mn, _, _)| *mn);
-    for ix in &intersections {
-        println!("{:?}", ix);
-    }
+    let (part1_norm, _, _) = intersections.iter().nth(1).unwrap();
+    println!("Part 1: {:?}", part1_norm);
 
-    println!("\nIntersections by sum of wire trace lengths");
     intersections.sort_by_key(|(_, l, _)| *l);
-    for ix in &intersections {
-        println!("{:?}", ix);
-    }
+    let (_, part2_sum, _) = intersections.iter().nth(1).unwrap();
+    println!("Part 2: {:?}", part2_sum);
 }
 

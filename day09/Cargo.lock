@@ -3,3 +3,10 @@
 [[package]]
 name = "day9"
 version = "0.1.0"
+dependencies = [
+ "intcode-rk",
+]
+
+[[package]]
+name = "intcode-rk"
+version = "0.1.0"

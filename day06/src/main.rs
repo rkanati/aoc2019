@@ -1,10 +1,6 @@
 
 use {
-    std::{
-        collections::hash_map::HashMap,
-        io::{BufRead, BufReader},
-        fs::File,
-    },
+    std::collections::hash_map::HashMap,
     multimap::MultiMap,
 };
 
@@ -62,12 +58,10 @@ fn invert_tree<'a>(tree: &Tree<'a>) -> InvTree<'a> {
 }
 
 fn main() {
-    let file = File::open("input").expect("opening input");
-    let input = BufReader::new(file);
+    let input = include_str!("../input");
     let tree: Tree = input
         .lines()
         .map(|line| {
-            let line = line.expect("i/o");
             let mut parts = line.split(')')
                 .map(|s| s.to_string());
             let parent = parts.next().unwrap();

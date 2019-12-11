@@ -1,6 +1,4 @@
 
-use std::io::BufRead;
-
 fn fuel_for_mass(mass: i32) -> i32 {
     std::iter::successors(
         Some(mass),
@@ -25,12 +23,10 @@ mod tests {
 }
 
 fn main() {
-    let file = std::fs::File::open("input").expect("failed opening input");
-    let input = std::io::BufReader::new(file);
+    let input = include_str!("../input");
 
     let fuel: i32 = input.lines()
         .map(|line| {
-            let line = line.expect("i/o error");
             let mass: i32 = line.parse().expect("bad input");
             fuel_for_mass(mass)
         })
