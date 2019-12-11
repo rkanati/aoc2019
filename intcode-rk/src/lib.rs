@@ -1,31 +1,55 @@
 
+/// A memory reference, i.e. a pointer.
 #[derive(Clone, Copy)]
 enum MemRef {
+    /// An absolute reference. The effective address is stored directly.
     Abs(u64),
+    /// A relative reference. The effective address is the current relative base address, plus this
+    /// offset.
     Rel(i64)
 }
 
+/// An instruction operand.
 #[derive(Clone, Copy)]
 enum Operand {
+    /// An operand stored in memory.
     Mem(MemRef),
+    /// An immediate operand.
     Imm(i64)
 }
 
 impl Operand {
-    fn decode<'a>(word: i64, iword: i64) -> Option<(Operand, i64)> {
+    /// Decodes an operand from the corresponding word in the instruction stream, and from a word
+    /// containing the parameter mode digits from the instruction word.
+    ///
+    /// # Arguments
+    ///
+    /// * `word`  - The operand word, exracted left-to-right from the instruction stream.
+    /// * `modes` - The the instruction word, with the opcode digits divided out. Contains parameter
+    ///             mode digits right-to-left.
+    ///
+    /// # Returns
+    ///
+    /// If decoding fails, returns `None`. Otherwise, returns `Some(operand, remaining_modes)`,
+    /// where
+    ///
+    /// * `operand`         - The decoded operand.
+    /// * `remaining_modes` - A word containing the mode digits for any remaining operands.
+    fn decode<'a>(word: i64, modes: i64) -> Option<(Operand, i64)> {
         use Operand::*;
-        let mode = iword % 10;
+        let mode = modes % 10;
         let operand = match mode {
             0 => Mem(MemRef::Abs(word as u64)),
             1 => Imm(word),
             2 => Mem(MemRef::Rel(word)),
-            _ => { eprintln!("bad parameter mode {}", mode); return None; }
+            _ => { return None; }
         };
 
-        Some((operand, iword / 10))
+        Some((operand, modes / 10))
     }
 }
 
+/// Opcodes for instructions with the `XXM` encoding
 #[derive(Clone, Copy)]
 enum OpXXM {
     Add, // ADD
@@ -34,38 +58,63 @@ enum OpXXM {
     Equ, // EQUal to
 }
 
+/// Opcodes for instructions with the `XX` encoding
 #[derive(Clone, Copy)]
 enum OpXX {
-    JiT, // Jump If True
-    JiF, // Jump If False
+    JIT, // Jump If True
+    JIF, // Jump If False
 }
 
+/// Opcodes for instructions with the `M` encoding
 #[derive(Clone, Copy)]
 enum OpM {
     Inp, // INPut
 }
 
+/// Opcodes for instructions with the `X` encoding
 #[derive(Clone, Copy)]
 enum OpX {
     Out, // OUTput
     ARB, // Adjust Relative Base
 }
 
+/// Opcodes for instructions with the `N` encoding
 #[derive(Clone, Copy)]
 enum OpN {
     Halt, // HALT machine
 }
 
+/// An intcode instruction, distinguished by encoding. Each variant carries a tuple of an opcode
+/// followed by any operands.
 #[derive(Clone, Copy)]
 enum Instruction {
+    /// XXM-encoded instructions: three operands, the third of which must be a memory reference.
     XXM(OpXXM, Operand, Operand, MemRef),
+    /// XX-encoded instructions: two operands, with no restrictions.
     XX(OpXX, Operand, Operand),
+    /// M-encoded instructions: one operand, which must be a memory reference.
     M(OpM, MemRef),
+    /// X-encoded instructions: one operand of any kind.
     X(OpX, Operand),
+    /// N-encoded instructions: no operands.
     N(OpN)
 }
 
 impl Instruction {
+    /// Decodes an instruction from an instruction stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `stream` - A slice of an instruction stream. Decoding proceeds from the beginning of this
+    ///              slice.
+    ///
+    /// # Returns
+    ///
+    /// If decoding fails, returns `None`. Otherwise, returns `Some(instruction, length)`,
+    /// where
+    ///
+    /// * `instruction` - The decoded instruction.
+    /// * `length`      - The length of the instruction in words.
     fn decode(stream: &[i64]) -> Option<(Instruction, u64)> {
         use Instruction::*;
 
@@ -95,8 +144,8 @@ impl Instruction {
                 let (oa2, _    ) = Operand::decode(stream[2], iword)?;
                 use OpXX::*;
                 let op = match opcode {
-                    5 => JiT,
-                    6 => JiF,
+                    5 => JIT,
+                    6 => JIF,
                     _ => unreachable!()
                 };
                 (XX(op, oa1, oa2), 3)
@@ -134,20 +183,32 @@ impl Instruction {
     }
 }
 
+/// Internal state of the VM
 #[derive(Clone, Copy)]
 enum VMState {
+    /// Executing may proceed normally from `ip`.
     Running { ip: u64 },
+    /// Waiting for input. `feed_input` will store its input via `dest`, and execution will resume
+    /// normally at `resume_ip`.
     WaitInput { dest: MemRef, resume_ip: u64 },
+    /// A `Halt` instruction was executed. Execution may not be resumed.
     Stopped
 }
 
+/// An intermediate result of advancing execution, returned by `run`. Clients may need to react to
+/// these before resuming.
 #[derive(Clone, Copy)]
 pub enum VMResult {
+    /// A `Halt` instruction was executed. Execution may not be resumed.
     Stopped,
+    /// The VM is waiting for input. This must be supplied with `feed_input` before resuming
+    /// exection.
     WaitInput,
+    /// The VM output a word. The client can use this as necessary, and resume execution.
     Output(i64)
 }
 
+/// An intcode virtual machine.
 #[derive(Clone)]
 pub struct VM {
     state: VMState,
@@ -156,10 +217,22 @@ pub struct VM {
 }
 
 impl VM {
+    /// Create a new VM.
+    ///
+    /// # Arguments
+    ///
+    /// * `memory` - Initial memory contents, starting from address `0`. Usually contains an intcode
+    /// program.
     pub fn new(memory: Vec<i64>) -> VM {
         VM { state: VMState::Running { ip: 0 }, rel_base: 0, memory }
     }
 
+    /// Feed the VM an input word.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the VM is not waiting for input. Thus, `feed_input` must only be called in respose
+    /// to `run` returning `VMState::WaitInput`.
     pub fn feed_input(&mut self, input: i64) {
         if let VMState::WaitInput { dest, resume_ip } = self.state {
             *self.mem_mut(dest) = input;
@@ -170,6 +243,7 @@ impl VM {
         }
     }
 
+    /// Run the VM. Will execute until client intervention is required.
     pub fn run(&mut self) -> VMResult {
         loop {
             if let Some(output) = self.step() {
@@ -184,6 +258,9 @@ impl VM {
         }
     }
 
+    /// Is the VM waiting for input?
+    ///
+    /// This is probably not useful at all.
     pub fn waiting(&self) -> bool {
         match self.state {
             VMState::WaitInput {..} => true,
@@ -191,10 +268,12 @@ impl VM {
         }
     }
 
-    pub fn dump_memory(&self) -> Vec<i64> {
-        self.memory.clone()
+    /// Consumes the VM, and returns the contents of its memory.
+    pub fn dump_memory(self) -> Vec<i64> {
+        self.memory
     }
 
+    /// Reads the memory word at the given address.
     fn mem(&mut self, addr: u64) -> i64 {
         let addr = addr as usize;
         if addr >= self.memory.len() {
@@ -203,6 +282,7 @@ impl VM {
         self.memory[addr]
     }
 
+    /// Returns a mutable reference to the memory word via the given memory reference.
     fn mem_mut(&mut self, ptr: MemRef) -> &mut i64 {
         use MemRef::*;
         let addr = match ptr {
@@ -217,6 +297,7 @@ impl VM {
         &mut self.memory[addr]
     }
 
+    /// Evaluate the given operand, loading from memory if necessary.
     fn read_operand(&mut self, oa: Operand) -> i64 {
         use {Operand::*, MemRef::*};
         match oa {
@@ -228,6 +309,7 @@ impl VM {
         }
     }
 
+    /// Execute one instruction. Returns `Some(word)` if there is output, `None` otherwise.
     fn step(&mut self) -> Option<i64> {
         let ip = match self.state {
             VMState::Running   { ip } => ip,
@@ -260,8 +342,8 @@ impl VM {
                 let x2 = self.read_operand(x2);
                 use OpXX::*;
                 match op {
-                    JiT => if x1 != 0 { next_ip = x2 as u64; }
-                    JiF => if x1 == 0 { next_ip = x2 as u64; }
+                    JIT => if x1 != 0 { next_ip = x2 as u64; }
+                    JIF => if x1 == 0 { next_ip = x2 as u64; }
                 }
             }
 
@@ -300,6 +382,8 @@ impl VM {
     }
 }
 
+/// Run a VM with the given initial memory contents and input to completion, and return the any
+/// output it made.
 pub fn run_vm(mem: Vec<i64>, input: impl IntoIterator<Item = i64>) -> Vec<i64> {
     let mut input = input.into_iter();
     let mut vm = VM::new(mem);
@@ -316,6 +400,7 @@ pub fn run_vm(mem: Vec<i64>, input: impl IntoIterator<Item = i64>) -> Vec<i64> {
     output
 }
 
+/// Parse intcode programs, one per line, from a string.
 pub fn parse_programs<'a> (src: &'a str) -> impl Iterator<Item = Vec<i64>> + 'a {
     src.lines()
         .map(|line| {
