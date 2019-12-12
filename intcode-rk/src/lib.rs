@@ -1,19 +1,37 @@
 
-/// A memory reference, i.e. a pointer.
+use {
+    std::convert::{TryFrom, TryInto},
+};
+
+/// A pointer into memory.
 #[derive(Clone, Copy)]
-enum MemRef {
-    /// An absolute reference. The effective address is stored directly.
-    Abs(u64),
-    /// A relative reference. The effective address is the current relative base address, plus this
+enum Pointer {
+    /// An absolute pointer. The effective address is stored directly.
+    Abs(usize),
+    /// A relative pointer. The effective address is the current relative base address, plus this
     /// offset.
-    Rel(i64)
+    Rel(isize)
+}
+
+impl Pointer {
+    /// Resolves the pointer into an effective address.
+    fn resolve(self, rel_base: usize) -> Option<usize> {
+        match self {
+            Pointer::Abs(address) => Some(address),
+            Pointer::Rel(offset) => {
+                let rel_base: isize = rel_base.try_into().ok()?;
+                let address = rel_base + offset;
+                address.try_into().ok()
+            }
+        }
+    }
 }
 
 /// An instruction operand.
 #[derive(Clone, Copy)]
 enum Operand {
     /// An operand stored in memory.
-    Mem(MemRef),
+    Mem(Pointer),
     /// An immediate operand.
     Imm(i64)
 }
@@ -39,9 +57,9 @@ impl Operand {
         use Operand::*;
         let mode = modes % 10;
         let operand = match mode {
-            0 => Mem(MemRef::Abs(word as u64)),
+            0 => Mem(Pointer::Abs(word.try_into().ok()?)),
             1 => Imm(word),
-            2 => Mem(MemRef::Rel(word)),
+            2 => Mem(Pointer::Rel(word.try_into().ok()?)),
             _ => { return None; }
         };
 
@@ -88,12 +106,12 @@ enum OpN {
 /// followed by any operands.
 #[derive(Clone, Copy)]
 enum Instruction {
-    /// XXM-encoded instructions: three operands, the third of which must be a memory reference.
-    XXM(OpXXM, Operand, Operand, MemRef),
+    /// XXM-encoded instructions: three operands, the third of which must be a pointer.
+    XXM(OpXXM, Operand, Operand, Pointer),
     /// XX-encoded instructions: two operands, with no restrictions.
     XX(OpXX, Operand, Operand),
-    /// M-encoded instructions: one operand, which must be a memory reference.
-    M(OpM, MemRef),
+    /// M-encoded instructions: one operand, which must be a pointer.
+    M(OpM, Pointer),
     /// X-encoded instructions: one operand of any kind.
     X(OpX, Operand),
     /// N-encoded instructions: no operands.
@@ -118,16 +136,16 @@ impl Instruction {
     fn decode(stream: &[i64]) -> Option<(Instruction, u64)> {
         use Instruction::*;
 
-        let iword = stream[0];
-        let (opcode, iword) = (iword % 100, iword / 100);
+        let inst_word = stream[0];
+        let (opcode, modes) = (inst_word % 100, inst_word / 100);
 
         let inst = match opcode {
             1 | 2 | 7 | 8 => {
-                let (s1, iword) = Operand::decode(stream[1], iword)?;
-                let (s2, iword) = Operand::decode(stream[2], iword)?;
-                let (d,  _    ) = Operand::decode(stream[3], iword)?;
-                let d = if let Operand::Mem(d) = d { d }
-                        else { eprintln!("instruction with immediate destination"); return None; };
+                let (operand1, modes) = Operand::decode(stream[1], modes)?;
+                let (operand2, modes) = Operand::decode(stream[2], modes)?;
+                let (dest,     _    ) = Operand::decode(stream[3], modes)?;
+                let dest = if let Operand::Mem(ptr) = dest { ptr }
+                           else                            { return None; };
                 use OpXXM::*;
                 let op = match opcode {
                     1 => Add,
@@ -136,24 +154,24 @@ impl Instruction {
                     8 => Equ,
                     _ => unreachable!()
                 };
-                (XXM(op, s1, s2, d), 4)
+                (XXM(op, operand1, operand2, dest), 4)
             }
 
             5 | 6 => {
-                let (oa1, iword) = Operand::decode(stream[1], iword)?;
-                let (oa2, _    ) = Operand::decode(stream[2], iword)?;
+                let (operand1, modes) = Operand::decode(stream[1], modes)?;
+                let (operand2, _    ) = Operand::decode(stream[2], modes)?;
                 use OpXX::*;
                 let op = match opcode {
                     5 => JIT,
                     6 => JIF,
                     _ => unreachable!()
                 };
-                (XX(op, oa1, oa2), 3)
+                (XX(op, operand1, operand2), 3)
             }
 
             3 => {
-                let (oa, _) = Operand::decode(stream[1], iword)?;
-                let ptr = if let Operand::Mem(ptr) = oa { ptr }
+                let (operand, _) = Operand::decode(stream[1], modes)?;
+                let ptr = if let Operand::Mem(ptr) = operand { ptr }
                           else { eprintln!("M instruction with immediate operand"); return None; };
                 use OpM::*;
                 let op = match opcode {
@@ -164,14 +182,14 @@ impl Instruction {
             }
 
             4 | 9 => {
-                let (oa, _) = Operand::decode(stream[1], iword)?;
+                let (operand, _) = Operand::decode(stream[1], modes)?;
                 use OpX::*;
                 let op = match opcode {
                     4 => Out,
                     9 => ARB,
                     _ => unreachable!()
                 };
-                (X(op, oa), 2)
+                (X(op, operand), 2)
             }
 
             99 => (N(OpN::Halt), 1),
@@ -190,7 +208,7 @@ enum VMState {
     Running { ip: u64 },
     /// Waiting for input. `feed_input` will store its input via `dest`, and execution will resume
     /// normally at `resume_ip`.
-    WaitInput { dest: MemRef, resume_ip: u64 },
+    WaitInput { dest: Pointer, resume_ip: u64 },
     /// A `Halt` instruction was executed. Execution may not be resumed.
     Stopped
 }
@@ -211,9 +229,9 @@ pub enum VMResult {
 /// An intcode virtual machine.
 #[derive(Clone)]
 pub struct VM {
-    state: VMState,
-    rel_base: i64,
-    memory: Vec<i64>
+    state:    VMState,
+    rel_base: usize,
+    memory:   Vec<i64>
 }
 
 impl VM {
@@ -235,7 +253,7 @@ impl VM {
     /// to `run` returning `VMState::WaitInput`.
     pub fn feed_input(&mut self, input: i64) {
         if let VMState::WaitInput { dest, resume_ip } = self.state {
-            *self.mem_mut(dest) = input;
+            *self.mem(dest) = input;
             self.state = VMState::Running { ip: resume_ip };
         }
         else {
@@ -273,39 +291,20 @@ impl VM {
         self.memory
     }
 
-    /// Reads the memory word at the given address.
-    fn mem(&mut self, addr: u64) -> i64 {
-        let addr = addr as usize;
+    /// Returns a mutable reference to the memory word pointed to by `ptr`.
+    fn mem(&mut self, ptr: Pointer) -> &mut i64 {
+        let addr = ptr.resolve(self.rel_base).expect("resolving pointer");
         if addr >= self.memory.len() {
             self.memory.resize(addr + 1, 0);
         }
-        self.memory[addr]
-    }
-
-    /// Returns a mutable reference to the memory word via the given memory reference.
-    fn mem_mut(&mut self, ptr: MemRef) -> &mut i64 {
-        use MemRef::*;
-        let addr = match ptr {
-            Abs(p) => p as usize,
-            Rel(o) => (self.rel_base + o) as usize,
-        };
-
-        if addr >= self.memory.len() {
-            self.memory.resize(addr + 1, 0);
-        }
-
         &mut self.memory[addr]
     }
 
     /// Evaluate the given operand, loading from memory if necessary.
-    fn read_operand(&mut self, oa: Operand) -> i64 {
-        use {Operand::*, MemRef::*};
-        match oa {
-            Imm(x) => x,
-            Mem(r) => match r {
-                Abs(p) => self.mem(p),
-                Rel(o) => self.mem((self.rel_base + o) as u64)
-            }
+    fn read_operand(&mut self, operand: Operand) -> i64 {
+        match operand {
+            Operand::Imm(value) => value,
+            Operand::Mem(ptr)   => *self.mem(ptr)
         }
     }
 
@@ -319,40 +318,47 @@ impl VM {
 
         let (inst, len) = Instruction::decode(&self.memory[ip as usize..])
             .expect("instruction decode");
-        let mut next_ip = ip + len;
-        let mut output = None;
+
+        let ip = ip + len;
+        self.state = VMState::Running { ip };
 
         use {Instruction::*};
         match inst {
-            XXM(op, s1, s2, d) => {
-                let s1 = self.read_operand(s1);
-                let s2 = self.read_operand(s2);
+            XXM(op, src1, src2, dest) => {
+                let src1 = self.read_operand(src1);
+                let src2 = self.read_operand(src2);
                 use OpXXM::*;
                 let result = match op {
-                    Add => s1 + s2,
-                    Mul => s1 * s2,
-                    Les => if s1 <  s2 { 1 } else { 0 },
-                    Equ => if s1 == s2 { 1 } else { 0 },
+                    Add => src1 + src2,
+                    Mul => src1 * src2,
+                    Les => if src1 <  src2 { 1 } else { 0 },
+                    Equ => if src1 == src2 { 1 } else { 0 },
                 };
-                *self.mem_mut(d) = result;
+                *self.mem(dest) = result;
             },
 
-            XX(op, x1, x2) => {
-                let x1 = self.read_operand(x1);
-                let x2 = self.read_operand(x2);
+            XX(op, operand1, operand2) => {
+                let operand1 = self.read_operand(operand1);
+                let operand2 = self.read_operand(operand2);
                 use OpXX::*;
-                match op {
-                    JIT => if x1 != 0 { next_ip = x2 as u64; }
-                    JIF => if x1 == 0 { next_ip = x2 as u64; }
-                }
+                let ip = match op {
+                    JIT if operand1 != 0 => { operand2 as u64 }
+                    JIF if operand1 == 0 => { operand2 as u64 }
+                    _                    => { ip }
+                };
+                self.state = VMState::Running { ip };
             }
 
-            X(op, x) => {
-                let x = self.read_operand(x);
+            X(op, operand) => {
+                let operand = self.read_operand(operand);
                 use OpX::*;
                 match op {
-                    Out => { output = Some(x); }
-                    ARB => { self.rel_base += x; }
+                    Out => { return Some(operand); }
+                    ARB => {
+                        self.rel_base = isize::try_from(self.rel_base)
+                            .and_then(|rel_base| usize::try_from(rel_base + operand as isize))
+                            .expect("rel_base out of range");
+                    }
                 }
             }
 
@@ -360,8 +366,7 @@ impl VM {
                 use OpM::*;
                 match op {
                     Inp => {
-                        self.state = VMState::WaitInput { dest: ptr, resume_ip: next_ip };
-                        return None;
+                        self.state = VMState::WaitInput { dest: ptr, resume_ip: ip };
                     }
                 }
             }
@@ -371,14 +376,12 @@ impl VM {
                 match op {
                     Halt => {
                         self.state = VMState::Stopped;
-                        return None;
                     }
                 }
             }
         };
 
-        self.state = VMState::Running { ip: next_ip };
-        output
+        None
     }
 }
 
