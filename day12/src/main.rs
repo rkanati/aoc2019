@@ -5,7 +5,6 @@ extern crate scan_fmt;
 use {
     std::{
         ops::{Add, Sub, AddAssign, SubAssign},
-        collections::HashSet,
     },
 };
 
@@ -104,7 +103,7 @@ impl MoonCoord for i32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Moon<X: MoonCoord> {
     pub pos: X,
     pub vel: X
@@ -132,15 +131,10 @@ fn step<X> (moons: &mut [Moon<X>])
 }
 
 fn steps_to_repeat(mut moons: [Moon<i32>; 4]) -> usize {
-    let mut history = HashSet::new();
-    history.insert(moons);
+    let first = moons;
     for i in 1.. {
         step(&mut moons);
-        match history.get(&moons) {
-            Some(_) => { return i; }
-            None    => { history.insert(moons); }
-        }
-        history.insert(moons);
+        if moons == first { return i; }
     }
     unreachable!()
 }
