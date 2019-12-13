@@ -226,6 +226,17 @@ pub enum VMResult {
     Output(i64)
 }
 
+impl VMResult {
+    /// If `self` is an `Output`, return the wrapped word. Otherwise, panic with the given
+    /// `message`.
+    pub fn expect_output(self, message: &'static str) -> i64 {
+        match self {
+            VMResult::Output(word) => word,
+            _                      => { panic!(message); }
+        }
+    }
+}
+
 /// An intcode virtual machine.
 #[derive(Clone)]
 pub struct VM {
