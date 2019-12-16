@@ -235,6 +235,14 @@ impl VMResult {
             _                      => { panic!(message); }
         }
     }
+
+    /// If `self` is a WaitInput, do nothing an return. Otherwise, panic with the given `message`.
+    pub fn expect_wait_input(self, message: &'static str) {
+        match self {
+            VMResult::WaitInput => { }
+            _                   => { panic!(message); }
+        }
+    }
 }
 
 /// An intcode virtual machine.
